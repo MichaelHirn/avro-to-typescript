@@ -55,7 +55,10 @@ export class RecordConverter extends BaseConverter {
         if (TypeHelper.isEnumType(type)) {
             const converter = new EnumConverter();
             const exportModel = converter.convert(type);
-            this.enumExports.push(exportModel);
+
+            if (this.enumExports.findIndex((enumExport) => enumExport.name === exportModel.name) < 0) {
+                this.enumExports.push(exportModel);
+            }
 
             return exportModel.name;
         }
@@ -65,8 +68,11 @@ export class RecordConverter extends BaseConverter {
         }
 
         if (TypeHelper.isRecordType(type)) {
-            this.interfaceRows.push(...this.extractInterface(type));
-            this.interfaceRows.push("");
+            // do not push the interface if it is already in this.interfaceRows
+            if (! this.interfaceRows.join("\n").includes(this.extractInterface(type).join("\n"))) {
+                this.interfaceRows.push(...this.extractInterface(type));
+                this.interfaceRows.push("");
+            }
 
             // in case the type is another record,
             // apply the same transformName that we do on the record

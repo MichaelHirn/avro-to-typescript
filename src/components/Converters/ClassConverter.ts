@@ -1,6 +1,6 @@
 import { SpecialCharacterHelper } from "../../helpers/SpecialCharacterHelper";
 import { TypeHelper } from "../../helpers/TypeHelper";
-import { RecordType } from "../../interfaces/AvroSchema";
+import { Field, RecordType } from "../../interfaces/AvroSchema";
 import { ExportModel } from "../../models/ExportModel";
 import { RecordConverter } from "./RecordConverter";
 
@@ -65,10 +65,80 @@ export class ClassConverter extends RecordConverter {
         return rows;
     }
 
+    protected getFieldTypeAndClass(field: Field): {fieldType: string, classRow: string} {
+        let fieldType;
+        let classRow;
+        let fullFieldName = field.name;
+        if (typeof this.transformName === "function") { fullFieldName = this.transformName(fullFieldName); }
+        if (TypeHelper.hasDefault(field) || TypeHelper.isOptional(field.type)) {
+            const defaultValue = TypeHelper.hasDefault(field) ? ` = ${TypeHelper.getDefault(field)}` : "";
+            fieldType = `${this.getField(field)}`;
+            classRow = `public ${fieldType}${defaultValue};`;
+        } else {
+            const convertedType = this.convertType(field.type);
+            fieldType = `${fullFieldName}: ${convertedType}`;
+            classRow = `public ${fullFieldName}!: ${convertedType};`;
+        }
+        return { fieldType: `${fieldType};`, classRow };
+    }
+
+    protected getInterfaceText(data: RecordType, fullName: string) {
+        return (
+`export interface ${fullName}${this.interfaceSuffix} {
+${data.fields.map((field) => {
+    const { fieldType } = this.getFieldTypeAndClass(field);
+    return "    " + fieldType;
+}).join("\n")}
+}
+`);
+    }
+
+    protected getClassText(
+        { data, fullName, shortName, namespacedName,
+        }: {data: RecordType, fullName: string, shortName: string, namespacedName: string},
+    ) {
+        return (
+`export class ${shortName} extends BaseAvroRecord implements ${fullName}${this.interfaceSuffix} {
+
+    public static readonly subject: string = "${namespacedName}";
+    public static readonly schema: object = ${
+        JSON.stringify(data, null, 4)
+            .split("\n")
+            .map((line, i) => i === 0 ? line : "    " + line)
+            .join("\n")
+    };
+
+    public static deserialize(buffer: Buffer, newSchema?: object): ${shortName} {
+        const result = new ${shortName}();
+
+        const rawResult = this.internalDeserialize(
+            buffer,
+            newSchema,
+            ${this.logicalTypes.className ? `{ logicalTypes: ${this.logicalTypes.className} }` : "" }
+        );
+        result.loadValuesFromType(rawResult);
+
+        return result;
+    }
+
+${data.fields.map((field) => {
+    const { classRow } = this.getFieldTypeAndClass(field);
+    return "    " + classRow;
+}).join("\n")}
+
+    public schema(): object {
+        return ${shortName}.schema;
+    }
+
+    public subject(): string {
+        return ${shortName}.subject;
+    }
+}`);
+    }
+
     protected extractClass(data: RecordType): string[] {
         const rows: string[] = [];
         const interfaceRows: string[] = [];
-        const TAB = SpecialCharacterHelper.TAB;
 
         let shortName = data.name;
         const namespacedName = data.namespace ? `${data.namespace}.${shortName}` : shortName;
@@ -78,63 +148,9 @@ export class ClassConverter extends RecordConverter {
             fullName = this.transformName(fullName);
         }
 
-        interfaceRows.push(`export interface ${fullName}${this.interfaceSuffix} {`);
-        rows.push(`export class ${shortName} extends BaseAvroRecord implements ${fullName}${this.interfaceSuffix} {`);
-        rows.push(``);
+        interfaceRows.push(this.getInterfaceText(data, fullName));
 
-        rows.push(`${TAB}public static readonly subject: string = "${namespacedName}";`);
-        rows.push(`${TAB}public static readonly schema: object = ${JSON.stringify(data, null, 4)}`);
-        rows.push(``);
-
-        rows.push(`${TAB}public static deserialize(buffer: Buffer, newSchema?: object): ${shortName} {`);
-        rows.push(`${TAB}${TAB}const result = new ${shortName}();`);
-        rows.push(
-          `${TAB}${TAB}const rawResult = this.internalDeserialize(
-            buffer,
-            newSchema,
-            ${this.logicalTypes.className ? `{ logicalTypes: ${this.logicalTypes.className} }` : "" }
-        );`,
-        );
-        rows.push(`${TAB}${TAB}result.loadValuesFromType(rawResult);`);
-        rows.push(``);
-        rows.push(`${TAB}${TAB}return result;`);
-        rows.push(`${TAB}}`);
-        rows.push(``);
-
-        for (const field of data.fields) {
-            let fieldType;
-            let classRow;
-            let fullFieldName = field.name;
-            if (typeof this.transformName === "function") { fullFieldName = this.transformName(fullFieldName); }
-            if (TypeHelper.hasDefault(field) || TypeHelper.isOptional(field.type)) {
-                const defaultValue = TypeHelper.hasDefault(field) ? ` = ${TypeHelper.getDefault(field)}` : "";
-                fieldType = `${this.getField(field)}`;
-                classRow = `${TAB}public ${fieldType}${defaultValue};`;
-            } else {
-                const convertedType = this.convertType(field.type);
-                fieldType = `${fullFieldName}: ${convertedType}`;
-                classRow = `${TAB}public ${fullFieldName}!: ${convertedType};`;
-            }
-
-            interfaceRows.push(`${this.TAB}${fieldType};`);
-
-            rows.push(classRow);
-        }
-        interfaceRows.push("}");
-
-        rows.push(``);
-
-        rows.push(`${TAB}public schema(): object {`);
-        rows.push(`${TAB}${TAB}return ${shortName}.schema;`);
-        rows.push(`${TAB}}`);
-
-        rows.push(``);
-
-        rows.push(`${TAB}public subject(): string {`);
-        rows.push(`${TAB}${TAB}return ${shortName}.subject;`);
-        rows.push(`${TAB}}`);
-
-        rows.push(`}`);
+        rows.push(this.getClassText({data, fullName, shortName, namespacedName}));
 
         this.interfaceRows.push(...interfaceRows);
         return rows;
